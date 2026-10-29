@@ -287,24 +287,50 @@ local function bindControls(host)
 	return api
 end
 
-local windowApi = {}
-function windowApi:AddTab(name, icon, tip)
-	local tab = UI:Tab(name, icon or "circle")
+local function makeTabProxy(tab)
 	pcall(function()
 		if tab._ensureBuilt then tab:_ensureBuilt() end
 	end)
 	local proxy = {}
 	function proxy:AddLeftGroupbox(title, icon2)
-		-- Do not use Section: Tempo Section clears the active content slot so toggles never mount.
 		pcall(function()
-			tab:Label(tostring(title or "Section"))
+			if tab.Section then
+				tab:Section(tostring(title or "Section"))
+			else
+				tab:Label(tostring(title or "Section"))
+			end
 		end)
 		return bindControls(tab)
 	end
 	function proxy:AddRightGroupbox(title, icon2)
 		return proxy:AddLeftGroupbox(title, icon2)
 	end
+	-- Obsidian tabboxes → flatten into same Tempo tab (sub-tabs as sections)
+	function proxy:AddLeftTabbox()
+		local box = {}
+		function box:AddTab(subName)
+			pcall(function()
+				if tab.Section then
+					tab:Section(tostring(subName or "Section"))
+				else
+					tab:Label(tostring(subName or "Section"))
+				end
+			end)
+			return bindControls(tab)
+		end
+		return box
+	end
+	function proxy:AddRightTabbox()
+		return proxy:AddLeftTabbox()
+	end
+	function proxy:RefreshSides() end
 	return proxy
+end
+
+local windowApi = {}
+function windowApi:AddTab(name, icon, tip)
+	local tab = UI:Tab(name, icon or "circle")
+	return makeTabProxy(tab)
 end
 
 function library:CreateWindow(opts)
