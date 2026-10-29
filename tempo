@@ -186,19 +186,54 @@ local function makeOption(id, kind, info)
 	return o
 end
 
-local function bindControls(host)
+local sectionQueues = {}
+local sectionOrder = {}
+local sectionTab = {}
+local uiFlushDone = false
+
+local function enqueue(sectionTitle, tab, fn)
+	if not sectionQueues[sectionTitle] then
+		sectionQueues[sectionTitle] = {}
+		sectionOrder[#sectionOrder + 1] = sectionTitle
+		sectionTab[sectionTitle] = tab
+	end
+	sectionQueues[sectionTitle][#sectionQueues[sectionTitle] + 1] = fn
+end
+
+local function flushTempoUI()
+	if uiFlushDone then return end
+	uiFlushDone = true
+	for _, title in ipairs(sectionOrder) do
+		local tab = sectionTab[title]
+		local list = sectionQueues[title] or {}
+		if tab then
+			pcall(function()
+				if tab._section then
+					tab:_section(tostring(title))
+				elseif tab.Section then
+					tab:Section(tostring(title))
+				else
+					tab:Label(tostring(title))
+				end
+			end)
+			for _, fn in ipairs(list) do
+				pcall(fn, tab)
+			end
+		end
+	end
+end
+
+local function bindControls(host, sectionTitle)
+	local title = sectionTitle or "Main"
 	local api = {}
 	function api:AddToggle(id, info)
 		info = info or {}
 		local tgl = makeToggle(id, info)
-		local ok, err = pcall(function()
-			host:Toggle(info.Text or id, tgl.Value, function(v)
+		enqueue(title, host, function(tab)
+			tab:Toggle(info.Text or id, tgl.Value, function(v)
 				tgl:SetValue(v)
 			end)
 		end)
-		if not ok then
-			pcall(function() host:Label((info.Text or id) .. " [toggle failed]") end)
-		end
 		return tgl
 	end
 	function api:AddSlider(id, info)
@@ -208,8 +243,8 @@ local function bindControls(host)
 		local def = info.Default
 		if def == nil then def = min end
 		local o = makeOption(id, "Slider", { Default = def, Callback = info.Callback })
-		pcall(function()
-			host:Slider(info.Text or id, min, max, def, function(v)
+		enqueue(title, host, function(tab)
+			tab:Slider(info.Text or id, min, max, def, function(v)
 				o:SetValue(v)
 			end)
 		end)
@@ -219,16 +254,16 @@ local function bindControls(host)
 		info = info or {}
 		local values = info.Values or {}
 		local o = makeOption(id, "Dropdown", info)
-		pcall(function()
-			if host.Dropdown then
-				host:Dropdown(info.Text or id, values, o.Value, function(v)
+		enqueue(title, host, function(tab)
+			if tab.Dropdown then
+				tab:Dropdown(info.Text or id, values, o.Value, function(v)
 					o:SetValue(v)
 				end)
 			else
-				host:Label((info.Text or id) .. ": " .. tostring(o.Value))
+				tab:Label((info.Text or id) .. ": " .. tostring(o.Value))
 				for _, item in ipairs(values) do
 					local capture = item
-					host:Button(tostring(capture), false, function()
+					tab:Button(tostring(capture), false, function()
 						o:SetValue(capture)
 					end)
 				end
@@ -242,14 +277,16 @@ local function bindControls(host)
 			text = textOrId.Text or "Button"
 			callback = textOrId.Func or textOrId.Callback
 		end
-		pcall(function()
-			host:Button(tostring(text), false, function()
+		enqueue(title, host, function(tab)
+			tab:Button(tostring(text), false, function()
 				if callback then pcall(callback) end
 			end)
 		end)
 	end
 	function api:AddLabel(text)
-		pcall(function() host:Label(tostring(text or "")) end)
+		enqueue(title, host, function(tab)
+			tab:Label(tostring(text or ""))
+		end)
 		return { SetText = function() end }
 	end
 	function api:AddInput(id, info)
@@ -258,14 +295,14 @@ local function bindControls(host)
 			Default = info.Default or info.Text or "",
 			Callback = info.Callback,
 		})
-		pcall(function()
-			if host.Input then
-				host:Input(info.Text or id, 160, function(txt)
+		enqueue(title, host, function(tab)
+			if tab.Input then
+				tab:Input(info.Text or id, 160, function(txt)
 					o:SetValue(txt)
 					if info.Finished then pcall(info.Finished, txt) end
 				end)
 			else
-				host:Label((info.Text or id) .. " = " .. tostring(o.Value))
+				tab:Label((info.Text or id) .. " = " .. tostring(o.Value))
 			end
 		end)
 		return o
@@ -273,12 +310,14 @@ local function bindControls(host)
 	function api:AddKeybind(id, info)
 		info = info or {}
 		local o = makeOption(id, "Keybind", { Default = info.Default, Callback = info.Callback })
-		pcall(function() host:Label((info.Text or id) .. " [keybind]") end)
+		enqueue(title, host, function(tab)
+			tab:Label((info.Text or id) .. " [keybind]")
+		end)
 		return o
 	end
 	function api:AddDivider()
-		pcall(function()
-			if host.Divider then host:Divider() end
+		enqueue(title, host, function(tab)
+			if tab.Divider then tab:Divider() end
 		end)
 	end
 	function api:AddDependencyBox()
@@ -293,30 +332,31 @@ local function makeTabProxy(tab)
 	end)
 	local proxy = {}
 	function proxy:AddLeftGroupbox(title, icon2)
-		pcall(function()
-			if tab.Section then
-				tab:Section(tostring(title or "Section"))
-			else
-				tab:Label(tostring(title or "Section"))
-			end
-		end)
-		return bindControls(tab)
+		local name = tostring(title or "Section")
+		if not sectionQueues[name] then
+			sectionQueues[name] = {}
+			sectionOrder[#sectionOrder + 1] = name
+			sectionTab[name] = tab
+		else
+			sectionTab[name] = tab
+		end
+		return bindControls(tab, name)
 	end
 	function proxy:AddRightGroupbox(title, icon2)
 		return proxy:AddLeftGroupbox(title, icon2)
 	end
-	-- Obsidian tabboxes → flatten into same Tempo tab (sub-tabs as sections)
 	function proxy:AddLeftTabbox()
 		local box = {}
 		function box:AddTab(subName)
-			pcall(function()
-				if tab.Section then
-					tab:Section(tostring(subName or "Section"))
-				else
-					tab:Label(tostring(subName or "Section"))
-				end
-			end)
-			return bindControls(tab)
+			local name = tostring(subName or "Section")
+			if not sectionQueues[name] then
+				sectionQueues[name] = {}
+				sectionOrder[#sectionOrder + 1] = name
+				sectionTab[name] = tab
+			else
+				sectionTab[name] = tab
+			end
+			return bindControls(tab, name)
 		end
 		return box
 	end
@@ -6623,7 +6663,8 @@ function library.AutoFarm:ApplySnapshot(snapshot)
     return true
 end
 
-function library.AutoFarm:LoadState()
+function flushTempoUI()
+library.AutoFarm:LoadState()
     local transitionToken = tostring(env.RunawaysAutoFarmTransitionToken or "")
     local queuedState = env.RunawaysAutoFarmQueuedState
     local resumeBest
@@ -12472,6 +12513,7 @@ task.spawn(function()
     end
 end)
 
+flushTempoUI()
 ThemeManager:SetLibrary(library)
 SaveManager:SetLibrary(library)
 
