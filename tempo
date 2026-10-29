@@ -126,26 +126,26 @@ end)
 
 local function makeToggle(id, info)
 	info = info or {}
-	local t = {
+	local tgl = {
 		Value = info.Default == true,
 		Default = info.Default == true,
 		Type = "Toggle",
 	}
-	function t:SetValue(v, silent)
+	function tgl:SetValue(v, silent)
 		self.Value = v and true or false
 		if not silent and info.Callback then
 			pcall(info.Callback, self.Value)
 		end
 	end
-	function t:OnChanged(cb)
+	function tgl:OnChanged(cb)
 		local old = info.Callback
 		info.Callback = function(v)
 			if old then pcall(old, v) end
 			pcall(cb, v)
 		end
 	end
-	library.Toggles[id] = t
-	return t
+	library.Toggles[id] = tgl
+	return tgl
 end
 
 local function makeOption(id, kind, info)
@@ -186,17 +186,20 @@ local function makeOption(id, kind, info)
 	return o
 end
 
-local function groupboxApi(tab)
+local function bindControls(host)
 	local api = {}
 	function api:AddToggle(id, info)
 		info = info or {}
-		local t = makeToggle(id, info)
-		pcall(function()
-			tab:Toggle(info.Text or id, t.Value, function(v)
-				t:SetValue(v)
+		local tgl = makeToggle(id, info)
+		local ok, err = pcall(function()
+			host:Toggle(info.Text or id, tgl.Value, function(v)
+				tgl:SetValue(v)
 			end)
 		end)
-		return t
+		if not ok then
+			pcall(function() host:Label((info.Text or id) .. " [toggle failed]") end)
+		end
+		return tgl
 	end
 	function api:AddSlider(id, info)
 		info = info or {}
@@ -206,7 +209,7 @@ local function groupboxApi(tab)
 		if def == nil then def = min end
 		local o = makeOption(id, "Slider", { Default = def, Callback = info.Callback })
 		pcall(function()
-			tab:Slider(info.Text or id, min, max, def, function(v)
+			host:Slider(info.Text or id, min, max, def, function(v)
 				o:SetValue(v)
 			end)
 		end)
@@ -217,15 +220,15 @@ local function groupboxApi(tab)
 		local values = info.Values or {}
 		local o = makeOption(id, "Dropdown", info)
 		pcall(function()
-			if tab.Dropdown then
-				tab:Dropdown(info.Text or id, values, o.Value, function(v)
+			if host.Dropdown then
+				host:Dropdown(info.Text or id, values, o.Value, function(v)
 					o:SetValue(v)
 				end)
 			else
-				tab:Label((info.Text or id) .. ": " .. tostring(o.Value))
+				host:Label((info.Text or id) .. ": " .. tostring(o.Value))
 				for _, item in ipairs(values) do
 					local capture = item
-					tab:Button(tostring(capture), false, function()
+					host:Button(tostring(capture), false, function()
 						o:SetValue(capture)
 					end)
 				end
@@ -240,13 +243,13 @@ local function groupboxApi(tab)
 			callback = textOrId.Func or textOrId.Callback
 		end
 		pcall(function()
-			tab:Button(tostring(text), false, function()
+			host:Button(tostring(text), false, function()
 				if callback then pcall(callback) end
 			end)
 		end)
 	end
 	function api:AddLabel(text)
-		pcall(function() tab:Label(tostring(text or "")) end)
+		pcall(function() host:Label(tostring(text or "")) end)
 		return { SetText = function() end }
 	end
 	function api:AddInput(id, info)
@@ -256,13 +259,13 @@ local function groupboxApi(tab)
 			Callback = info.Callback,
 		})
 		pcall(function()
-			if tab.Input then
-				tab:Input(info.Text or id, 160, function(txt)
+			if host.Input then
+				host:Input(info.Text or id, 160, function(txt)
 					o:SetValue(txt)
 					if info.Finished then pcall(info.Finished, txt) end
 				end)
 			else
-				tab:Label((info.Text or id) .. " = " .. tostring(o.Value))
+				host:Label((info.Text or id) .. " = " .. tostring(o.Value))
 			end
 		end)
 		return o
@@ -270,10 +273,14 @@ local function groupboxApi(tab)
 	function api:AddKeybind(id, info)
 		info = info or {}
 		local o = makeOption(id, "Keybind", { Default = info.Default, Callback = info.Callback })
-		pcall(function() tab:Label((info.Text or id) .. " [keybind]") end)
+		pcall(function() host:Label((info.Text or id) .. " [keybind]") end)
 		return o
 	end
-	function api:AddDivider() end
+	function api:AddDivider()
+		pcall(function()
+			if host.Divider then host:Divider() end
+		end)
+	end
 	function api:AddDependencyBox()
 		return api
 	end
@@ -283,14 +290,19 @@ end
 local windowApi = {}
 function windowApi:AddTab(name, icon, tip)
 	local tab = UI:Tab(name, icon or "circle")
+	pcall(function()
+		if tab._ensureBuilt then tab:_ensureBuilt() end
+	end)
 	local proxy = {}
 	function proxy:AddLeftGroupbox(title, icon2)
-		pcall(function() tab:Section(title or "Section") end)
-		return groupboxApi(tab)
+		-- Do not use Section: Tempo Section clears the active content slot so toggles never mount.
+		pcall(function()
+			tab:Label(tostring(title or "Section"))
+		end)
+		return bindControls(tab)
 	end
 	function proxy:AddRightGroupbox(title, icon2)
-		pcall(function() tab:Section(title or "Section") end)
-		return groupboxApi(tab)
+		return proxy:AddLeftGroupbox(title, icon2)
 	end
 	return proxy
 end
@@ -304,6 +316,9 @@ function library:CreateWindow(opts)
 		else
 			UI:Notify("TEMPO | Runaways loaded", "good")
 		end
+	end)
+	pcall(function()
+		if UI.Show then UI:Show() end
 	end)
 	return windowApi
 end
@@ -343,6 +358,10 @@ local options = library.Options
 local toggles = library.Toggles
 
 env.AutoLoot = library
+
+if env.RunawaysScriptLoading ~= coroutine.running() then
+	return env.AutoLoot
+end
 
 
 local hiddenInventoryCategories = {
